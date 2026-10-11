@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest a new setting, movement or browser.
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        EROICA is strictly defensive. Requests that bypass authentication,
+        CAPTCHAs or access controls will be declined.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What privacy problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Which movement does it belong to, and at which tier?
+    validations:
+      required: true
+  - type: dropdown
+    id: movement
+    attributes:
+      label: Suggested movement
+      options:
+        - I · First (foundations)
+        - III · Eroica (anti-fingerprinting)
+        - V · Fate (trackers & telemetry)
+        - VI · Pastoral (storage hygiene)
+        - IX · Choral (transport security)
+        - A new movement
+    validations:
+      required: true
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Suggested minimum tier
+      options:
+        - standard
+        - strict
+        - paranoid
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
