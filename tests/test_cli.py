@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 
@@ -100,6 +101,17 @@ def test_launch_dry_run_chromium() -> None:
     assert code == 0
     assert any("--user-data-dir=" in arg for arg in payload["command"])
     assert payload["command"][-1] == "https://example.com"
+
+
+def test_stealth_cli_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("eroica.stealth.find_binary", lambda browser: Path("zen.exe"))
+    code, payload = run(["--json", "stealth", "-b", "zen", "--dry-run", "https://x.test"])
+    assert code == 0
+    assert payload["tier"] == "paranoid"
+    assert payload["ephemeral"] is True
+    assert payload["private"] is True
+    assert any("-private-window" in a or "--incognito" in a for a in payload["command"])
+    assert payload["command"][-1] == "https://x.test"
 
 
 def test_unknown_browser_exits_nonzero() -> None:

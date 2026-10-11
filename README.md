@@ -74,6 +74,32 @@ eroica audit --browser firefox --profile osint-1
 
 That is the whole loop: **create → launch → audit**.
 
+### Throwaway sessions (`stealth`)
+
+When a lookup should leave no trace in this machine — a fresh identity, a clean
+session, nothing carried over — use `stealth`:
+
+```bash
+# A brand-new random profile, hardened at paranoid, opened in a private window.
+# The profile is deleted the moment the browser closes.
+eroica stealth https://example.com
+
+# Keep the profile for later inspection instead of deleting it.
+eroica stealth --keep --browser brave
+
+# Preview exactly what would run, without touching disk.
+eroica stealth --dry-run --browser zen
+```
+
+- Every run generates a **new random profile** — nothing is reused, so sessions
+  are not correlated with each other.
+- Hardening runs at `paranoid` by default (`--tier` to override), the browser
+  opens in private mode on that isolated profile.
+- On exit the profile is **discarded** unless you pass `--keep`.
+- **Honest limit:** `stealth` protects your *identity inside the site* — not
+  your network identity. The endpoint still sees your real IP; pair it with a
+  VPN or Tor if that matters.
+
 ## The five movements
 
 | # | Movement | Opus | Concern | Highlights |
@@ -117,6 +143,7 @@ eroica harden -b brave -p research --tier strict   # re-tune later
 | `eroica harden` | (Re)apply hardening; `--dry-run` prints the `user.js` |
 | `eroica audit` | Detect drift; exits non-zero if unhealthy |
 | `eroica launch` | Launch the browser in its hardened profile |
+| `eroica stealth` | Throwaway, anonymous-profile session; self-destructs on exit |
 | `eroica config` | Show or update global configuration |
 | `eroica remove` | Delete a profile |
 

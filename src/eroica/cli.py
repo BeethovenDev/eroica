@@ -34,6 +34,7 @@ from eroica.profiles import (
     remove_profile,
     resolve_profile,
 )
+from eroica.stealth import launch_stealth, plan_stealth
 from eroica.symphonies import SYMPHONIES, collect_flags, collect_prefs
 
 _log = log.get_logger("cli")
@@ -386,6 +387,54 @@ def cmd_launch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stealth(args: argparse.Namespace) -> int:
+    """Launch a throwaway, fully hardened, self-destructing session."""
+    config = load_config()
+    tier = Tier.coerce(args.tier) if args.tier else Tier.PARANOID
+    urls = [u for u in (args.urls or []) if u != "--"]
+    browser_key = _resolve_browser_key(args.browser)
+    session = plan_stealth(
+        browser_key,
+        tier=tier,
+        user_agent=args.ua,
+        keep=args.keep,
+        urls=urls,
+        create=not args.dry_run,
+        config=config,
+    )
+
+    base_payload = {
+        "browser": browser_key,
+        "tier": tier.name.lower(),
+        "ephemeral": True,
+        "private": True,
+        "keep": bool(args.keep),
+        "user_agent": session.user_agent,
+        "command": session.command,
+    }
+    if args.dry_run:
+        _emit(args, base_payload, " ".join(session.command))
+        return 0
+
+    for warning in session.warnings:
+        _log.warning("%s", warning)
+    print(f"STEALTH · {session.browser.name} · tier {tier.name.lower()} · profile {session.profile.name}")
+    print(f"        profile will be discarded when the browser closes "
+          f"{'unless --keep' if args.keep else ''}".rstrip())
+
+    code = launch_stealth(session)
+
+    payload = {
+        **base_payload,
+        "profile": session.profile.name,
+        "discarded": not args.keep,
+        "exit_code": code,
+    }
+    _emit(args, payload, f"stealth session ended (exit {code}); "
+                         f"profile {'discarded' if not args.keep else 'kept'}")
+    return code
+
+
 # --------------------------------------------------------------------------- #
 # Parser
 # --------------------------------------------------------------------------- #
@@ -468,6 +517,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_launch.add_argument("--dry-run", action="store_true", help="print the command only")
     p_launch.add_argument("urls", nargs=argparse.REMAINDER, help="URLs to open")
     p_launch.set_defaults(func=cmd_launch)
+
+    p_stealth = sub.add_parser(
+        "stealth",
+        aliases=["anon"],
+        help="launch a throwaway, fully hardened, private session (self-destructing)",
+    )
+    p_stealth.add_argument("-b", "--browser")
+    p_stealth.add_argument(
+        "-t", "--tier", choices=[t.name.lower() for t in Tier],
+        default=None,
+        help="hardening tier (default: paranoid)",
+    )
+    p_stealth.add_argument("--ua", help="pin an explicit User-Agent for this session")
+    p_stealth.add_argument("--keep", action="store_true",
+                           help="keep the throwaway profile after closing")
+    p_stealth.add_argument("--dry-run", action="store_true",
+                           help="print the command without launching")
+    p_stealth.add_argument("urls", nargs=argparse.REMAINDER, help="URLs to open")
+    p_stealth.set_defaults(func=cmd_stealth)
 
     return parser
 
