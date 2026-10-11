@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-10-11
+
+### Added
+
+- **Zen Browser** support (Firefox-based): binary detection, profile-root
+  resolution and hardened `user.js` generation on its own isolated profiles.
+
 ## [0.1.0] — 2026-10-11
 
 ### Added
@@ -24,5 +31,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - JSONL audit with drift detection.
 - Dependency-free, fully type-annotated implementation and a 77-test suite.
 
-[Unreleased]: https://github.com/BeethovenDev/eroica/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/BeethovenDev/eroica/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/BeethovenDev/eroica/releases/tag/v0.1.1
 [0.1.0]: https://github.com/BeethovenDev/eroica/releases/tag/v0.1.0

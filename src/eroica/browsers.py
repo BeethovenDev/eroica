@@ -19,7 +19,11 @@ from enum import Enum
 from pathlib import Path
 
 from eroica.errors import BrowserNotFound, UnsupportedBrowser
-from eroica.paths import chromium_user_data_dirs, firefox_profile_root, os_name
+from eroica.paths import (
+    chromium_user_data_dirs,
+    mozilla_profile_root,
+    os_name,
+)
 
 __all__ = [
     "Browser",
@@ -99,6 +103,24 @@ CATALOG: dict[str, Browser] = {
             "macos": ("/Applications/Waterfox.app/Contents/MacOS/waterfox",),
             "linux": ("/usr/bin/waterfox",),
         },
+    ),
+    "zen": Browser(
+        key="zen",
+        name="Zen Browser",
+        family=BrowserFamily.MOZILLA,
+        binaries=("zen", "zen.exe", "zen-browser"),
+        extra_paths={
+            "windows": (
+                r"%ProgramFiles%\Zen Browser\zen.exe",
+                r"%LOCALAPPDATA%\zen\zen.exe",
+            ),
+            "macos": ("/Applications/Zen.app/Contents/MacOS/zen",),
+            "linux": ("/usr/bin/zen-browser", "/opt/zen-browser/zen", "/opt/zen/zen"),
+        },
+        notes=(
+            "Firefox-based and privacy-minded; EROICA still adds isolated "
+            "profiles, strict DoH and its own anti-fingerprinting."
+        ),
     ),
     "chrome": Browser(
         key="chrome",
@@ -232,7 +254,7 @@ class DetectedBrowser:
 
 def _profile_roots(browser: Browser) -> tuple[Path, ...]:
     if browser.family is BrowserFamily.MOZILLA:
-        return (firefox_profile_root(),)
+        return (mozilla_profile_root(browser.key),)
     return tuple(chromium_user_data_dirs(browser.key))
 
 

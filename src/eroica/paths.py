@@ -19,7 +19,9 @@ __all__ = [
     "data_home",
     "firefox_profile_root",
     "home",
+    "mozilla_profile_root",
     "os_name",
+    "zen_profile_root",
 ]
 
 
@@ -99,6 +101,29 @@ def firefox_profile_root() -> Path:
     if osname == "macos":
         return home() / "Library" / "Application Support" / "Firefox"
     return home() / ".mozilla" / "firefox"
+
+
+def zen_profile_root() -> Path:
+    """Return the directory containing Zen Browser profiles."""
+    osname = os_name()
+    if osname == "windows":
+        base = _env_path("APPDATA") or home() / "AppData" / "Roaming"
+        return base / "zen" / "Profiles"
+    if osname == "macos":
+        return home() / "Library" / "Application Support" / "zen" / "Profiles"
+    return home() / ".zen"
+
+
+def mozilla_profile_root(browser_key: str) -> Path:
+    """Resolve a Mozilla-family profile root, with per-browser overrides.
+
+    Firefox-derived browsers (Zen, LibreWolf, Waterfox…) store profiles under
+    their own vendor directory rather than Mozilla's; unknown keys fall back
+    to the Firefox layout.
+    """
+    if browser_key == "zen":
+        return zen_profile_root()
+    return firefox_profile_root()
 
 
 #: Vendor-relative "User Data" directories, keyed by EROICA browser id.

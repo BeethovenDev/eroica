@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "eroica"
-version = "0.1.0"
+version = "0.1.1"
 description = "Browser privacy hardening for OSINT and everyday anonymity — named after Beethoven's Third."
 readme = "README.md"
 requires-python = ">=3.10"

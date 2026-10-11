@@ -24,7 +24,8 @@ that never touches your everyday browsing.
 
 It is dependency-free (Python standard library only), cross-platform
 (Windows · macOS · Linux) and understands both **Mozilla** (Firefox, LibreWolf,
-Waterfox) and **Chromium** (Chrome, Chromium, Brave, Edge, Vivaldi) families.
+Waterfox, Zen) and **Chromium** (Chrome, Chromium, Brave, Edge, Vivaldi)
+families.
 
 > **What this is.** A defensive privacy tool for investigators, journalists and
 > anyone who would rather not be tracked. **What this is not.** An anonymity

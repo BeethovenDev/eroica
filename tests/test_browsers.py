@@ -21,6 +21,7 @@ def test_catalogue_families_are_known() -> None:
 
 def test_get_browser_by_key() -> None:
     assert get_browser("firefox").family is BrowserFamily.MOZILLA
+    assert get_browser("zen").family is BrowserFamily.MOZILLA
     assert get_browser("brave").family is BrowserFamily.CHROMIUM
 
 
@@ -41,6 +42,12 @@ def test_candidate_paths_expand_per_os() -> None:
     assert firefox.candidate_paths("windows")
     assert firefox.candidate_paths("macos")
     assert firefox.candidate_paths("plan9") == []
+
+
+def test_zen_known_paths() -> None:
+    zen = get_browser("zen")
+    assert "zen.exe" in zen.binaries
+    assert any("Zen Browser" in str(p) for p in zen.candidate_paths("windows"))
 
 
 def test_detect_all_returns_every_browser() -> None:
