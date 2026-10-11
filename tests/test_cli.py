@@ -14,8 +14,9 @@ from pathlib import Path
 import pytest
 
 from eroica.cli import main
-from eroica.config import Tier
-from eroica.profiles import create_profile, remove_profile
+from eroica.config import Config, Tier, load_config, save_config
+from eroica.net import TOR_DEFAULT, ProbeResult
+from eroica.profiles import create_profile, load_profile, remove_profile
 
 
 def run(argv: list[str]) -> tuple[int, dict]:
@@ -159,6 +160,117 @@ def test_purge_cli_gives_up_after_timeout(monkeypatch: pytest.MonkeyPatch) -> No
 
     remove_profile(profile)  # clean the fixture up
     assert not profile.path.exists()
+
+
+def test_tor_on_off_toggle() -> None:
+    save_config(Config())
+    code, payload = run(["--json", "tor", "on"])
+    assert code == 0
+    assert payload["proxy"] == TOR_DEFAULT
+    assert payload["tor"] is True
+    assert load_config().proxy == TOR_DEFAULT
+
+    code, payload = run(["--json", "tor", "off"])
+    assert code == 0
+    assert payload["tor"] is False
+    assert load_config().proxy is None
+
+
+def test_tor_status_and_apply_rehardens() -> None:
+    profile = create_profile("firefox", "net-applied", tier=Tier.STRICT)
+    run(["--json", "tor", "on", "--apply"])
+    assert load_profile("firefox", "net-applied").meta.get("proxy") == TOR_DEFAULT
+
+    code, payload = run(["--json", "tor"])
+    assert code == 0
+    assert payload["tor"] is True
+    assert payload["proxy"] == TOR_DEFAULT
+
+    run(["--json", "tor", "off", "--apply"])
+    assert load_profile("firefox", "net-applied").meta.get("proxy") is None
+    assert profile.path.is_dir()  # unharmed
+    remove_profile(profile)
+
+
+def test_proxy_set_and_clear() -> None:
+    code, _ = run(["--json", "proxy", "socks5://10.0.0.5:1080"])
+    assert code == 0
+    assert load_config().proxy == "socks5://10.0.0.5:1080"
+
+    code, payload = run(["--json", "proxy", "off"])
+    assert code == 0
+    assert payload["proxy"] is None
+    assert load_config().proxy is None
+
+
+def test_proxy_rejects_unsupported_scheme() -> None:
+    code, _ = run(["--json", "proxy", "http://x:80"])
+    assert code == 1
+    assert load_config().proxy is None
+
+
+def test_check_ip_json_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = ProbeResult(proxy=None, direct_ip="203.0.113.9", exit_ip=None, reachable=True)
+    monkeypatch.setattr("eroica.net.probe_network", lambda config, *, timeout: fake)
+    code, payload = run(["--json", "check-ip"])
+    assert code == 0
+    assert payload["direct_ip"] == "203.0.113.9"
+    assert payload["exit_ip"] is None
+    assert payload["match"] is None
+
+
+def test_check_ip_expect_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = ProbeResult(
+        proxy="socks5://127.0.0.1:9050",
+        direct_ip="198.51.100.1",
+        exit_ip="185.220.101.4",
+        reachable=True,
+    )
+    monkeypatch.setattr("eroica.net.probe_network", lambda config, *, timeout: fake)
+    code, payload = run(["--json", "check-ip", "--expect", "185.220.101.4"])
+    assert code == 0
+    assert payload["match"] is True
+
+
+def test_check_ip_expect_mismatch_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = ProbeResult(
+        proxy="socks5://127.0.0.1:9050",
+        direct_ip="198.51.100.1",
+        exit_ip="185.220.101.4",
+        reachable=True,
+    )
+    monkeypatch.setattr("eroica.net.probe_network", lambda config, *, timeout: fake)
+    code, payload = run(["--json", "check-ip", "--expect", "9.9.9.9"])
+    assert code == 1
+    assert payload["match"] is False
+
+
+def test_check_ip_expect_unverifiable_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = ProbeResult(
+        proxy="socks5://127.0.0.1:9050",
+        direct_ip="198.51.100.1",
+        exit_ip=None,
+        reachable=False,
+        error="connection refused",
+    )
+    monkeypatch.setattr("eroica.net.probe_network", lambda config, *, timeout: fake)
+    code, _ = run(["--json", "check-ip", "--expect", "185.220.101.4"])
+    assert code == 1
+
+
+def test_launch_uses_materialized_proxy_flags() -> None:
+    save_config(Config(proxy="socks5://127.0.0.1:9050"))
+    create_profile("chrome", "net-launch", tier=Tier.STRICT)
+    code, _ = run(["--json", "harden", "-b", "chrome", "-p", "net-launch", "-t", "strict"])
+    assert code == 0
+
+    code, payload = run(["--json", "launch", "-b", "chrome", "-p", "net-launch", "--dry-run"])
+    assert code == 0
+    assert any("--proxy-server=socks5://127.0.0.1:9050" in a for a in payload["command"])
+    assert not any("--dns-over-https-mode" in a for a in payload["command"])
+    assert any("--disable-features=DnsOverHttps" in a for a in payload["command"])
+
+    remove_profile(load_profile("chrome", "net-launch"))
 
 
 def test_unknown_browser_exits_nonzero() -> None:

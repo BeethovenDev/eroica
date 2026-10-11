@@ -104,6 +104,37 @@ eroica stealth --dry-run --browser zen
   your network identity. The endpoint still sees your real IP; pair it with a
   VPN or Tor if that matters.
 
+### Routing through a proxy (the network layer)
+
+Hardening alone cannot hide your IP — that needs a network you trust. EROICA
+doesn't pretend otherwise; it *orchestrates* the tunnel and verifies the exit:
+
+```bash
+# Route every hardened session through the Tor SOCKS endpoint
+eroica tor on
+
+# ...and confirm what the public internet actually sees
+eroica check-ip
+
+# A gate before risky research: fail loudly unless this exit IP appears
+eroica check-ip --expect 185.220.101.4 ; echo $?
+
+# Or point at any SOCKS5 endpoint (e.g. a VPN on a static IP)
+eroica proxy socks5://10.0.0.5:1080
+eroica proxy off
+```
+
+- When a proxy is configured, hardening forces **all** traffic and **DNS**
+  through it: for Firefox that means `socks_remote_dns` + DoH off, for Chromium
+  `--proxy-server` + `--host-resolver-rules` + DoH off — a hostname can no
+  longer leak straight to your ISP's resolver.
+- `tor on --apply` (or `proxy ...` plus a re-`harden`) applies routing to every
+  existing profile; `eroica audit` stays the source of truth.
+- **Honest limit:** `check-ip` verifies the network path — it does not make the
+  path. Keep Tor (or your VPN) running; if it drops, `check-ip` says
+  `reachable: false` instead of guessing. Tor circuits rotate constantly, so
+  `--expect` is for *stable* exit IPs (VPNs), not Tor.
+
 ## The five movements
 
 | # | Movement | Opus | Concern | Highlights |
@@ -149,6 +180,9 @@ eroica harden -b brave -p research --tier strict   # re-tune later
 | `eroica launch` | Launch the browser in its hardened profile |
 | `eroica stealth` | Throwaway, anonymous-profile session; self-destructs on exit |
 | `eroica purge` | Wait for a locked profile to be released, then delete it |
+| `eroica tor` | Route hardened sessions through the Tor SOCKS endpoint |
+| `eroica proxy` | Set or clear the SOCKS proxy used by all hardened sessions |
+| `eroica check-ip` | Report the IP the internet sees, directly and via the proxy |
 | `eroica config` | Show or update global configuration |
 | `eroica remove` | Delete a profile |
 
@@ -167,7 +201,7 @@ eroica doctor --json | jq '.browsers[] | select(.installed)'
                     └──────────────┬──────────────┘
                                    │  tier filters settings
                     ┌──────────────▼──────────────┐
-   hardening.py     │  resolve plan (prefs/flags) │   + DoH endpoint, + pinned UA
+   hardening.py     │  resolve plan (prefs/flags) │   + DoH endpoint, + pinned UA, + SOCKS proxy
                     └───────┬───────────────┬─────┘
                             │               │
               Mozilla family│               │Chromium family
@@ -191,6 +225,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map.
 * **Boring is anonymous.** A User-Agent that changes every request is its own
   fingerprint. EROICA pins one mainstream UA per profile, deterministically
   derived from the profile name.
+* **Routing is separate from hardening.** EROICA can route a session through
+  Tor or any SOCKS5 proxy, but it never claims that makes you anonymous — it
+  verifies the exit (`check-ip`) and says "unreachable" when it cannot.
 * **Fail closed, but say so.** Strict DoH and HTTPS-only mode fail closed; the
   audit and `--dry-run` exist so you always know what changed.
 * **No hidden magic.** Every setting is in a readable movement module with a

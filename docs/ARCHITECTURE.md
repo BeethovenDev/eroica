@@ -24,6 +24,7 @@ src/eroica/
 ├── hardening.py       plan resolution and the two write strategies
 ├── userjs.py          user.js render/merge/backup (idempotent markers)
 ├── flags.py           Chromium argument-vector builder
+├── net.py             network layer: SOCKS parse/probe + proxy settings
 ├── audit.py           read-only drift detection
 └── log.py             stderr logging (text or JSON lines)
 ```
@@ -34,8 +35,11 @@ src/eroica/
    each tagged with the minimum `Tier` at which it applies.
 2. **Filter.** `collect_prefs(tier)` / `collect_flags(tier)` gather settings that
    apply at or below the requested tier. Later movements win on duplicate keys.
-3. **Resolve.** `hardening.build_plan(...)` folds in the DoH endpoint and the
-   pinned User-Agent, and strips DoH directives when the resolver is `system`.
+3. **Resolve.** `hardening.build_plan(...)` folds in the DoH endpoint, the
+   pinned User-Agent and the configured SOCKS proxy (stripping DoH in proxy
+   mode, where DNS must stay inside the tunnel), and strips DoH directives when
+   the resolver is `system`. Repeated directives are collapsed to their final
+   value, matching how Firefox applies `user.js`.
 4. **Write.**
    * *Mozilla* → `userjs.write_user_js` renders the plan into a marked block,
      merging with any existing `user.js` and backing it up first.

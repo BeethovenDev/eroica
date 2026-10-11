@@ -36,11 +36,16 @@ class ConfigError(EroicaError):
     """Raised when configuration is malformed or cannot be persisted."""
 
 
+class NetworkError(EroicaError):
+    """Raised when a network probe (``proxy`` / ``check-ip``) cannot run."""
+
+
 __all__ = [
     "BrowserError",
     "BrowserNotFound",
     "ConfigError",
     "EroicaError",
+    "NetworkError",
     "ProfileError",
     "ProfileNotFound",
     "UnsupportedBrowser",

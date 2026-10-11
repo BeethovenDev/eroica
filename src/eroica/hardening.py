@@ -15,6 +15,7 @@ from eroica import log, ua
 from eroica.browsers import Browser, BrowserFamily
 from eroica.config import Config, Tier
 from eroica.flags import build_args
+from eroica.net import parse_proxy, proxy_chromium_flags, proxy_firefox_prefs
 from eroica.profiles import Profile
 from eroica.symphonies import collect_flags, collect_prefs
 from eroica.symphonies.base import ChromiumFlag, FirefoxPref
@@ -22,7 +23,14 @@ from eroica.userjs import write_user_js
 
 _log = log.get_logger("hardening")
 
-__all__ = ["HardeningPlan", "HardenResult", "build_plan", "harden", "preview_firefox"]
+__all__ = [
+    "HardeningPlan",
+    "HardenResult",
+    "build_plan",
+    "harden",
+    "load_materialized_args",
+    "preview_firefox",
+]
 
 #: Prefix marking the DoH prefs that are dropped when the DoH provider is "system".
 _TRR_PREFIX = "network.trr."
@@ -37,6 +45,7 @@ class HardeningPlan:
     flags: list[ChromiumFlag] = field(default_factory=list)
     user_agent: str | None = None
     doh_uri: str | None = None
+    proxy: str | None = None
 
 
 @dataclass
@@ -53,6 +62,7 @@ class HardenResult:
     flags_file: Path | None = None
     user_agent: str | None = None
     doh_uri: str | None = None
+    proxy: str | None = None
     dry_run: bool = False
     preview: str | None = None
 
@@ -108,8 +118,32 @@ def build_plan(
                                  f"Encrypted DNS via {config.doh_provider}."))
         prefs.append(FirefoxPref("network.trr.custom_uri", doh_uri, Tier.STANDARD))
 
-    plan.prefs = prefs
-    plan.flags = flags
+    # Network layer: route everything through the configured SOCKS proxy. DNS is
+    # forced inside the tunnel and DoH is switched off — a proxy is pointless if
+    # hostnames still leak straight to the resolver.
+    proxy = parse_proxy(config.proxy)
+    if proxy is not None:
+        plan.proxy = config.proxy
+        if browser.family is BrowserFamily.MOZILLA:
+            prefs = [p for p in prefs if not p.key.startswith(_TRR_PREFIX)]
+            prefs.extend(proxy_firefox_prefs(proxy))
+        else:
+            flags = [f for f in flags if not f.flag.startswith("--dns-over-https-mode")]
+            flags.extend(proxy_chromium_flags(proxy))
+        plan.doh_uri = None
+        _log.debug("proxy %s folded into plan for %s", proxy.as_url(), browser.key)
+
+    # A user.js file is applied top-to-bottom — the *last* value wins. Collapse
+    # repeated directives (e.g. Fate's paranoid-mode remote-DNS pref) to their
+    # final value so the emitted profile stays clean and deterministic.
+    final_prefs: dict[str, FirefoxPref] = {}
+    for pref in prefs:
+        final_prefs[pref.key] = pref
+    final_flags: dict[str, ChromiumFlag] = {}
+    for flag in flags:
+        final_flags[flag.flag] = flag
+    plan.prefs = list(final_prefs.values())
+    plan.flags = list(final_flags.values())
     return plan
 
 
@@ -163,6 +197,7 @@ def _harden_firefox(
         backup=backup_path,
         user_agent=plan.user_agent,
         doh_uri=plan.doh_uri,
+        proxy=plan.proxy,
         dry_run=dry_run,
         preview=content if dry_run else None,
     )
@@ -199,6 +234,7 @@ def _harden_chromium(
         flags_file=flags_file,
         user_agent=plan.user_agent,
         doh_uri=plan.doh_uri,
+        proxy=plan.proxy,
         dry_run=dry_run,
         preview=json.dumps(payload, indent=2) if dry_run else None,
     )
@@ -238,9 +274,36 @@ def harden(
         profile.meta["tier"] = tier.name.lower()
         if plan.user_agent:
             profile.meta["user_agent"] = plan.user_agent
+        else:
+            profile.meta.pop("user_agent", None)
         if plan.doh_uri:
             profile.meta["doh_uri"] = plan.doh_uri
+        else:
+            profile.meta.pop("doh_uri", None)
+        if plan.proxy:
+            profile.meta["proxy"] = plan.proxy
+        else:
+            profile.meta.pop("proxy", None)
         profile.save()
         _log.info("hardened %s profile %s at tier %s", browser.key, profile.name, tier.name.lower())
 
     return result
+
+
+def load_materialized_args(profile: Profile) -> list[str] | None:
+    """The Chromium argument vector persisted at harden time.
+
+    ``flags.json`` is the single source of truth for how a hardened profile is
+    launched (``launch`` and ``stealth`` use it, exactly like ``audit`` verifies
+    it). Returns ``None`` when the profile was never hardened, in which case the
+    caller should fall back to building a vector on the fly.
+    """
+    flags_file = profile.path / ".eroica" / "flags.json"
+    if not flags_file.is_file():
+        return None
+    try:
+        payload = json.loads(flags_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    args = payload.get("args")
+    return list(args) if isinstance(args, list) and args else None

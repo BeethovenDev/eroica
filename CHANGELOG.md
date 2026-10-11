@@ -6,7 +6,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.2.2] — 2026-10-11
+## [0.3.0] — 2026-10-11
+
+### Added
+
+- **The network layer** (`net`): EROICA now orchestrates *where* a hardened
+  session exits to the internet, not just *what* it looks like.
+  - **`eroica tor [on|off]`** — enable or disable routing through the standard
+    Tor SOCKS endpoint (`socks5://127.0.0.1:9050`). `--apply` also re-hardens
+    every existing profile against the new routing.
+  - **`eroica proxy [socks5://host:port | off]`** — set or clear an arbitrary
+    SOCKS5 proxy for all hardened sessions (also available as
+    `eroica config set --proxy`).
+  - **`eroica check-ip [--expect <ip>]`** — a dependency-free SOCKS5 probe
+    (RFC 1928) that reports the machine's direct IP **and** the IP the tunnel
+    exits on, and fails (exit 1) when `--expect` does not match or cannot be
+    verified. The honest gate before risky research.
+- **Proxy-aware hardening.** When a proxy is configured, hardening now:
+  - routes all Firefox traffic through SOCKS with `socks_remote_dns` (DNS stays
+    inside the tunnel) and disables DoH (`network.trr.mode = 5`) so hostnames
+    cannot leak around it;
+  - gives Chromium `--proxy-server`, `--host-resolver-rules` (DNS forced through
+    the proxy) and `--disable-features=DnsOverHttps`, and drops the DoH
+    template that would otherwise bypass the tunnel;
+  - records the proxy in profile metadata, and clears it again when the proxy is
+    turned off.
+- **`launch`/`stealth` use the materialised flags.** Chromium sessions now start
+  from the exact argument vector written by the last `harden` run (proxy, DoH,
+  UA pins included) with a rebuild fallback for never-hardened profiles, instead
+  of re-deriving flags that could drift from the profile's actual state.
+- Repeated `user.js` directives are collapsed to their final value (matching how
+  Firefox applies the file), keeping emitted profiles clean and deterministic.
+
+### Fixed
+
+- **`check-ip` no longer crashes when the tunnel is down.** Probe failures
+  (connection refused, no Tor running) are now reported as
+  `reachable: false` with the reason, instead of raising.
 
 ### Fixed
 

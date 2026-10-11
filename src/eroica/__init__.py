@@ -27,7 +27,7 @@ from __future__ import annotations
 
 __all__ = ["__version__", "BANNER"]
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 BANNER = r"""
   ___ ___  ___ ___ ___   _

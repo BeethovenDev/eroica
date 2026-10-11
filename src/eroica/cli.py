@@ -16,7 +16,7 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-from eroica import BANNER, __version__, log, ua
+from eroica import BANNER, __version__, log, net, ua
 from eroica.audit import audit_profile
 from eroica.browsers import (
     BrowserFamily,
@@ -27,7 +27,7 @@ from eroica.browsers import (
 from eroica.config import DOH_PROVIDERS, Config, Tier, config_path, load_config, save_config
 from eroica.errors import EroicaError, ProfileError
 from eroica.flags import build_args
-from eroica.hardening import harden, preview_firefox
+from eroica.hardening import harden, load_materialized_args, preview_firefox
 from eroica.paths import data_home, os_name
 from eroica.profiles import (
     Profile,
@@ -198,6 +198,13 @@ def cmd_config(args: argparse.Namespace) -> int:
         if args.backup is not None:
             config.backup_user_js = args.backup
             changed = True
+        if args.proxy is not None:
+            if args.proxy.lower() in {"off", "none", ""}:
+                config.proxy = None
+            else:
+                net.parse_proxy(args.proxy)  # validates before persisting
+                config.proxy = args.proxy
+            changed = True
         if changed:
             save_config(config)
             _log.info("updated %s", config_path())
@@ -215,6 +222,116 @@ def cmd_config(args: argparse.Namespace) -> int:
     print(f"doh provider: {payload['doh_provider']} ({config.doh_uri or 'system resolver'})")
     print(f"ua mode     : {payload['ua_mode']}")
     print(f"backup      : {'on' if config.backup_user_js else 'off'}")
+    print(f"proxy       : {config.proxy or 'not configured (direct)'}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# Network layer (proxy, Tor, exit-IP verification)
+# --------------------------------------------------------------------------- #
+def _reharden_all(config: Config, tier: Tier | None = None) -> int:
+    """Apply the current configuration to every existing profile."""
+    count = 0
+    for profile in list_profiles():
+        browser = get_browser(profile.browser_key)
+        chosen = Tier.coerce(profile.tier or tier or config.default_tier)
+        harden(browser, profile, chosen, config)
+        count += 1
+    _log.info("re-hardened %d profile(s)", count)
+    return count
+
+
+def cmd_tor(args: argparse.Namespace) -> int:
+    """Enable, disable or report the Tor SOCKS preset."""
+    config = load_config()
+    action = (args.action or "status").lower()
+
+    if action in {"on", "enable"}:
+        net.parse_proxy(net.TOR_DEFAULT)
+        config.proxy = net.TOR_DEFAULT
+        save_config(config)
+        hardened = _reharden_all(config) if args.apply else 0
+        if hardened:
+            _log.info("applied tor routing to %d existing profile(s)", hardened)
+        _emit(args, {"tor": True, "proxy": config.proxy, "applied": hardened},
+              f"tor routing enabled ({net.TOR_DEFAULT}); "
+              f"{f'applied to {hardened} profile(s)' if hardened else 're-harden profiles or pass --apply'}")
+        return 0
+
+    if action in {"off", "disable"}:
+        config.proxy = None
+        save_config(config)
+        hardened = _reharden_all(config) if args.apply else 0
+        if hardened:
+            _log.info("removed tor routing from %d existing profile(s)", hardened)
+        _emit(args, {"tor": False, "proxy": None, "applied": hardened},
+              f"tor routing disabled; {f'applied to {hardened} profile(s)' if hardened else 're-harden profiles or pass --apply'}")
+        return 0
+
+    status = "enabled" if config.proxy else "disabled"
+    hint = f"  ({config.proxy})" if config.proxy else \
+        "  (run 'eroica tor on' — then 'eroica harden' to apply to profiles)"
+    _emit(args, {"tor": bool(config.proxy), "proxy": config.proxy}, f"tor routing: {status}{hint}")
+    return 0
+
+
+def cmd_proxy(args: argparse.Namespace) -> int:
+    """Show, set or clear the SOCKS proxy used for every hardened session."""
+    config = load_config()
+    value = (args.value or "").strip() if args.value else None
+
+    if value is None:
+        _emit(args, {"proxy": config.proxy},
+              f"proxy: {config.proxy or 'not configured (traffic is direct)'}")
+        return 0
+
+    if value.lower() in {"off", "none"} or value == "":
+        config.proxy = None
+        save_config(config)
+        _emit(args, {"proxy": None}, "proxy cleared; re-harden profiles (or use 'eroica tor' --apply)")
+        return 0
+
+    net.parse_proxy(value)  # validates; raises ConfigError for junk
+    config.proxy = value
+    save_config(config)
+    _emit(args, {"proxy": config.proxy},
+          f"proxy set to {value}; re-harden profiles to apply (e.g. 'eroica harden -b zen -p osint-1')")
+    return 0
+
+
+def cmd_check_ip(args: argparse.Namespace) -> int:
+    """Show what IP the internet sees, directly and through the proxy."""
+    config = load_config()
+    result = net.probe_network(config, timeout=args.timeout)
+    observed = result.exit_ip if result.proxy else result.direct_ip
+    matched: bool | None = None
+    if args.expect:
+        matched = bool(
+            result.reachable and observed is not None and observed == args.expect
+        )
+
+    payload: dict[str, object] = {
+        **result.to_dict(),
+        "expected": args.expect,
+        "match": matched,
+    }
+
+    if not getattr(args, "json", False):
+        print(f"direct    : {result.direct_ip or 'unreachable'}")
+        if result.proxy:
+            print(f"via proxy : {result.exit_ip or 'unreachable'}  ({result.proxy})")
+        else:
+            print("via proxy : not configured — traffic is direct")
+        if args.expect:
+            print(f"expected  : {args.expect}  "
+                  f"({'match' if matched else 'MISMATCH' if matched is False else 'unverifiable'})")
+        if result.error:
+            print(f"note      : {result.error}")
+
+    if args.expect and matched is not True:
+        _emit(args, payload, "expected IP could not be verified")
+        return 1
+    _emit(args, payload, f"exit IP is {observed or 'unknown'}")
     return 0
 
 
@@ -367,14 +484,15 @@ def cmd_launch(args: argparse.Namespace) -> int:
             command.append("-private-window")
         command.extend(urls)
     else:
-        args_vec = build_args(
+        args_vec = load_materialized_args(profile) or build_args(
             profile.path,
             collect_flags(tier),
             user_agent=profile.user_agent,
             doh_uri=config.doh_uri,
-            private=args.private,
-            extra=urls,
         )
+        if args.private and "--incognito" not in args_vec:
+            args_vec.append("--incognito")
+        args_vec.extend(urls)
         command = [executable, *args_vec]
 
     if args.dry_run:
@@ -530,6 +648,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_set.add_argument("-t", "--tier", choices=[t.name.lower() for t in Tier])
     p_set.add_argument("--doh", choices=sorted(DOH_PROVIDERS))
     p_set.add_argument("--ua-mode", choices=["consistent", "off"])
+    p_set.add_argument("--proxy", metavar="SOCKS5_URL|off",
+                       help="route all hardened sessions through a SOCKS5 proxy")
     backup_group = p_set.add_mutually_exclusive_group()
     backup_group.add_argument("--backup", dest="backup", action="store_true", default=None)
     backup_group.add_argument("--no-backup", dest="backup", action="store_false")
@@ -607,6 +727,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_purge.add_argument("--poll", type=float, default=2.0,
                          help="seconds between retries (default: 2)")
     p_purge.set_defaults(func=cmd_purge)
+
+    p_tor = sub.add_parser(
+        "tor",
+        help="route hardened sessions through the Tor SOCKS endpoint",
+    )
+    p_tor.add_argument("action", nargs="?", choices=["on", "off"],
+                       help="enable/disable; no argument reports status")
+    p_tor.add_argument("--apply", action="store_true",
+                       help="also re-harden every existing profile")
+    p_tor.set_defaults(func=cmd_tor)
+
+    p_proxy = sub.add_parser(
+        "proxy",
+        help="show or set the SOCKS proxy for all hardened sessions",
+    )
+    p_proxy.add_argument("value", nargs="?",
+                         help="socks5://host:port, or 'off' to clear")
+    p_proxy.set_defaults(func=cmd_proxy)
+
+    p_check = sub.add_parser(
+        "check-ip",
+        help="report your IP as seen directly and through the proxy",
+    )
+    p_check.add_argument("--expect", metavar="IP",
+                         help="fail (exit 1) unless this IP is observed")
+    p_check.add_argument("--timeout", type=float, default=10.0,
+                         help="probe timeout in seconds (default: 10)")
+    p_check.set_defaults(func=cmd_check_ip)
 
     return parser
 

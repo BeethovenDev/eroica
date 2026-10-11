@@ -80,6 +80,9 @@ class Config:
     doh_provider: str = "mullvad"
     ua_mode: str = "consistent"
     backup_user_js: bool = True
+    #: SOCKS5 proxy URL (e.g. ``socks5://127.0.0.1:9050`` for Tor). ``None``
+    #: routes traffic directly. Deep validation lives in :mod:`eroica.net`.
+    proxy: str | None = None
 
     def __post_init__(self) -> None:
         self.default_tier = Tier.coerce(self.default_tier)
@@ -88,6 +91,8 @@ class Config:
             raise ConfigError(f"unknown DoH provider {self.doh_provider!r}; choose one of: {valid}")
         if self.ua_mode not in {"consistent", "off"}:
             raise ConfigError("ua_mode must be 'consistent' or 'off'")
+        if self.proxy is not None and not isinstance(self.proxy, str):
+            raise ConfigError("proxy must be a socks5:// URL string or None")
 
     @property
     def doh_uri(self) -> str | None:

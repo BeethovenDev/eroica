@@ -30,7 +30,7 @@ from eroica.browsers import Browser, BrowserFamily, find_binary, get_browser
 from eroica.config import Config, Tier
 from eroica.errors import BrowserNotFound, ProfileError
 from eroica.flags import build_args
-from eroica.hardening import harden
+from eroica.hardening import harden, load_materialized_args
 from eroica.paths import data_home
 from eroica.profiles import Profile, create_profile, remove_profile
 from eroica.symphonies import collect_flags
@@ -136,17 +136,18 @@ def plan_stealth(
             *list(urls),
         ]
     else:
-        command = [
-            str(binary),
-            *build_args(
-                profile.path,
-                collect_flags(tier),
-                user_agent=pinned_ua,
-                doh_uri=active_config.doh_uri,
-                private=True,
-                extra=list(urls),
-            ),
-        ]
+        # Use exactly what hardening materialised (proxy, DoH, UA pins live in
+        # flags.json); fall back to a fresh build for never-hardened profiles.
+        args_vec = load_materialized_args(profile) or build_args(
+            profile.path,
+            collect_flags(tier),
+            user_agent=pinned_ua,
+            doh_uri=active_config.doh_uri,
+        )
+        if "--incognito" not in args_vec:
+            args_vec.append("--incognito")
+        args_vec.extend(list(urls))
+        command = [str(binary), *args_vec]
 
     return StealthSession(
         browser=browser,

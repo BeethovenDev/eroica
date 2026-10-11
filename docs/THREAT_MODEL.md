@@ -13,8 +13,12 @@ users.
 EROICA does **not**:
 
 * bypass authentication, paywalls, CAPTCHAs or access controls;
-* provide network anonymity (there is no Tor/I2P integration here);
-* hide your IP address from a site you connect to directly;
+* provide network anonymity (EROICA can route a session through Tor or any
+  SOCKS proxy, but it does not run that network — no bundled Tor daemon, no VPN,
+  no replacement for a trusted tunnel);
+* hide your IP address from a site you connect to directly (only routing through
+  a trusted proxy/Tor/VPN changes what the endpoint sees; `eroica check-ip`
+  verifies the exit, it cannot create one);
 * protect against a compromised operating system, a hostile root certificate or
   physical access;
 * guarantee you cannot be identified by determined, well-resourced adversaries.
