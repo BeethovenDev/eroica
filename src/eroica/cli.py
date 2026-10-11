@@ -12,6 +12,7 @@ import contextlib
 import json
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -24,15 +25,18 @@ from eroica.browsers import (
     get_browser,
 )
 from eroica.config import DOH_PROVIDERS, Config, Tier, config_path, load_config, save_config
-from eroica.errors import EroicaError
+from eroica.errors import EroicaError, ProfileError
 from eroica.flags import build_args
 from eroica.hardening import harden, preview_firefox
 from eroica.paths import data_home, os_name
 from eroica.profiles import (
+    Profile,
     create_profile,
     list_profiles,
+    profiles_root,
     remove_profile,
     resolve_profile,
+    validate_name,
 )
 from eroica.stealth import launch_stealth, plan_stealth
 from eroica.symphonies import SYMPHONIES, collect_flags, collect_prefs
@@ -422,17 +426,72 @@ def cmd_stealth(args: argparse.Namespace) -> int:
     print(f"        profile will be discarded when the browser closes "
           f"{'unless --keep' if args.keep else ''}".rstrip())
 
-    code = launch_stealth(session)
+    result = launch_stealth(session)
+
+    if result.purge_scheduled:
+        summary = (
+            f"stealth session ended (exit {result.exit_code}); the profile is still "
+            f"locked by the browser, background cleanup scheduled"
+        )
+    elif result.discarded:
+        summary = f"stealth session ended (exit {result.exit_code}); profile discarded"
+    else:
+        summary = (
+            f"stealth session ended (exit {result.exit_code}); the profile was left "
+            f"behind — run 'eroica remove -b {browser_key} -p {session.profile.name}'"
+        )
 
     payload = {
         **base_payload,
         "profile": session.profile.name,
-        "discarded": not args.keep,
-        "exit_code": code,
+        "discarded": result.discarded,
+        "purge_scheduled": result.purge_scheduled,
+        "exit_code": result.exit_code,
     }
-    _emit(args, payload, f"stealth session ended (exit {code}); "
-                         f"profile {'discarded' if not args.keep else 'kept'}")
-    return code
+    _emit(args, payload, summary)
+    return result.exit_code
+
+
+def cmd_purge(args: argparse.Namespace) -> int:
+    """Wait until a profile's files are released, then delete it.
+
+    ``stealth`` hands over to this worker when a freshly-closed browser still
+    holds profile files. It retries deletion until the directory is gone or
+    ``--timeout`` seconds elapse. Also usable standalone — same semantics as
+    ``remove``, only with patience.
+    """
+    browser = get_browser(_resolve_browser_key(args.browser))
+    name = validate_name(args.profile)
+    path = profiles_root(browser.key) / name
+    deadline = time.monotonic() + args.timeout
+
+    _log.info("purge %s profile %s (budget %ds)", browser.key, name, args.timeout)
+    while True:
+        if not path.exists():
+            _emit(args, {"purged": name, "path": str(path)}, f"purged {name}")
+            return 0
+        try:
+            remove_profile(
+                Profile(name=name, browser_key=browser.key, path=path, meta={}),
+                missing_ok=True,
+                retries=1,
+            )
+            _emit(args, {"purged": name, "path": str(path)}, f"purged {name}")
+            return 0
+        except ProfileError as exc:
+            if time.monotonic() >= deadline:
+                _log.error(
+                    "could not purge %s within %ds: %s",
+                    name,
+                    args.timeout,
+                    exc,
+                )
+                hint = f"try again once the browser is fully closed: eroica remove -b {browser.key} -p {name}"
+                if not getattr(args, "json", False):
+                    print(hint)
+                return 1
+            _log.debug("profile %s still busy (%s); retrying in %ss", name, exc, args.poll)
+            time.sleep(args.poll)
 
 
 # --------------------------------------------------------------------------- #
@@ -536,6 +595,18 @@ def build_parser() -> argparse.ArgumentParser:
                            help="print the command without launching")
     p_stealth.add_argument("urls", nargs=argparse.REMAINDER, help="URLs to open")
     p_stealth.set_defaults(func=cmd_stealth)
+
+    p_purge = sub.add_parser(
+        "purge",
+        help="wait until a profile's files are released, then delete it",
+    )
+    p_purge.add_argument("-b", "--browser")
+    p_purge.add_argument("-p", "--profile", required=True)
+    p_purge.add_argument("--timeout", type=int, default=300,
+                         help="seconds to keep trying before giving up (default: 300)")
+    p_purge.add_argument("--poll", type=float, default=2.0,
+                         help="seconds between retries (default: 2)")
+    p_purge.set_defaults(func=cmd_purge)
 
     return parser
 

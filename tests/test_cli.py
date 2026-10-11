@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from eroica.cli import main
+from eroica.config import Tier
+from eroica.profiles import create_profile, remove_profile
 
 
 def run(argv: list[str]) -> tuple[int, dict]:
@@ -112,6 +114,51 @@ def test_stealth_cli_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert payload["private"] is True
     assert any("-private-window" in a or "--incognito" in a for a in payload["command"])
     assert payload["command"][-1] == "https://x.test"
+
+
+def test_purge_cli_removes_profile() -> None:
+    profile = create_profile("firefox", "purge-me", tier=Tier.STRICT)
+    code, payload = run(["--json", "purge", "-b", "firefox", "-p", "purge-me", "--timeout", "5"])
+    assert code == 0
+    assert payload["purged"] == "purge-me"
+    assert not profile.path.exists()
+
+
+def test_purge_cli_waits_for_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    from eroica.errors import ProfileError
+
+    profile = create_profile("firefox", "purge-wait", tier=Tier.STRICT)
+
+    real_remove = remove_profile
+    attempts = {"left": 1}
+
+    def flaky_remove(profile: object, **kwargs: object) -> None:
+        if attempts["left"] > 0:
+            attempts["left"] -= 1
+            raise ProfileError("busy")
+        real_remove(profile, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("eroica.cli.remove_profile", flaky_remove)
+    code, payload = run(["--json", "purge", "-b", "firefox", "-p", "purge-wait", "--timeout", "5", "--poll", "0.05"])
+    assert code == 0
+    assert not profile.path.exists()
+
+
+def test_purge_cli_gives_up_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from eroica.errors import ProfileError
+
+    profile = create_profile("firefox", "purge-stuck", tier=Tier.STRICT)
+
+    def stuck_remove(profile: object, **kwargs: object) -> None:
+        raise ProfileError("still held")
+
+    monkeypatch.setattr("eroica.cli.remove_profile", stuck_remove)
+    code, _ = run(["--json", "purge", "-b", "firefox", "-p", "purge-stuck", "--timeout", "1", "--poll", "0.05"])
+    assert code == 1
+    assert profile.path.exists()
+
+    remove_profile(profile)  # clean the fixture up
+    assert not profile.path.exists()
 
 
 def test_unknown_browser_exits_nonzero() -> None:

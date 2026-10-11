@@ -17,10 +17,13 @@ cleanup behaviour can be tested without opening a real browser.
 
 from __future__ import annotations
 
+import os
 import secrets
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from eroica import log, ua
 from eroica.browsers import Browser, BrowserFamily, find_binary, get_browser
@@ -34,7 +37,7 @@ from eroica.symphonies import collect_flags
 
 _log = log.get_logger("stealth")
 
-__all__ = ["StealthSession", "launch_stealth", "plan_stealth"]
+__all__ = ["StealthResult", "StealthSession", "launch_stealth", "plan_stealth"]
 
 #: Every stealth run gets a fresh identity — nothing is ever reused or pinned.
 _NAME_PREFIX = "stealth-"
@@ -44,6 +47,27 @@ _STANDARD_WARNINGS: tuple[str, ...] = (
     "Add a VPN or Tor underneath if that matters.",
     "This is a throwaway identity: every session starts completely blank.",
 )
+
+#: A browser that just closed often keeps child processes holding profile files
+#: for a while (Windows is famous for this). ``stealth`` waits for the locks to
+#: clear immediately; if they don't, it schedules a detached ``purge`` worker
+#: that hangs around for up to this many seconds and finishes the deletion as
+#: soon as the files are released.
+PURGE_TIMEOUT_SECONDS = 300
+
+
+@dataclass
+class StealthResult:
+    """Outcome of a finished stealth session."""
+
+    #: Return code of the browser process (or ``1`` if disposal failed and no
+    #: background purge could be scheduled).
+    exit_code: int
+    #: ``True`` when the throwaway profile was deleted in-process.
+    discarded: bool
+    #: ``True`` when a detached ``purge`` worker was scheduled to finish the
+    #: deletion once the profile's files are released.
+    purge_scheduled: bool = False
 
 
 @dataclass
@@ -149,12 +173,54 @@ def _default_launcher(command: Sequence[str]) -> int:
     return int(process.returncode or 0)
 
 
+def _spawn_purge(session: StealthSession) -> bool:
+    """Detach a ``purge`` worker that will finish deleting the profile.
+
+    The worker keeps retrying removal for up to :data:`PURGE_TIMEOUT_SECONDS`,
+    independent of this process's lifetime, so a slow browser teardown can no
+    longer defeat the self-destruct. Returns ``False`` if the worker could not
+    be started (then the caller falls back to telling the user).
+    """
+    command = [
+        sys.executable,
+        "-m",
+        "eroica",
+        "purge",
+        "-b",
+        session.browser.key,
+        "-p",
+        session.profile.name,
+        "--timeout",
+        str(PURGE_TIMEOUT_SECONDS),
+    ]
+    if os.name == "nt":
+        kwargs: dict[str, Any] = {
+            "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0),
+        }
+    else:  # pragma: no cover - POSIX
+        kwargs = {"start_new_session": True}
+    try:
+        subprocess.Popen(  # noqa: S603 - trusted argv, fully ours
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **kwargs,
+        )
+    except OSError as exc:
+        _log.warning("could not start background cleanup worker: %s", exc)
+        return False
+    _log.info("background purge worker started for profile %s", session.profile.name)
+    return True
+
+
 def launch_stealth(
     session: StealthSession,
     *,
     dry_run: bool = False,
     launcher: Callable[[Sequence[str]], int] | None = None,
-) -> int:
+) -> StealthResult:
     """Run a stealth session and dispose of the profile afterwards.
 
     Args:
@@ -163,24 +229,36 @@ def launch_stealth(
         launcher: Test seam; defaults to :func:`_default_launcher`.
     """
     if dry_run:
-        return 0
+        return StealthResult(exit_code=0, discarded=False)
 
     run = launcher or _default_launcher
     code = run(session.command)
 
-    if not session.keep:
-        try:
-            remove_profile(session.profile, missing_ok=True)
-        except ProfileError as exc:
-            _log.warning("could not discard throwaway profile %s: %s", session.profile.name, exc)
-            _log.warning(
-                "the profile was left behind; once the browser is fully closed run "
-                "'eroica remove -b %s -p %s' to finish the job",
-                session.browser.key,
-                session.profile.name,
-            )
-            return 1
-        _log.info("discarded throwaway profile %s", session.profile.name)
-    else:
+    if session.keep:
         _log.info("kept profile %s at %s (--keep)", session.profile.name, session.profile.path)
-    return code
+        return StealthResult(exit_code=code, discarded=False)
+
+    try:
+        remove_profile(session.profile, missing_ok=True)
+    except ProfileError as exc:
+        _log.warning(
+            "could not discard throwaway profile %s immediately: %s",
+            session.profile.name,
+            exc,
+        )
+        if _spawn_purge(session):
+            _log.warning(
+                "background cleanup scheduled: the profile will be removed as soon "
+                "as the browser releases its files"
+            )
+            return StealthResult(exit_code=code, discarded=False, purge_scheduled=True)
+        _log.warning(
+            "the profile was left behind; once the browser is fully closed run "
+            "'eroica remove -b %s -p %s' to finish the job",
+            session.browser.key,
+            session.profile.name,
+        )
+        return StealthResult(exit_code=1, discarded=False)
+
+    _log.info("discarded throwaway profile %s", session.profile.name)
+    return StealthResult(exit_code=code, discarded=True)

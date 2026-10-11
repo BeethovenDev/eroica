@@ -95,7 +95,11 @@ eroica stealth --dry-run --browser zen
   are not correlated with each other.
 - Hardening runs at `paranoid` by default (`--tier` to override), the browser
   opens in private mode on that isolated profile.
-- On exit the profile is **discarded** unless you pass `--keep`.
+- On exit the profile is **discarded** unless you pass `--keep`. Windows browsers
+  occasionally keep files locked for a few seconds after closing; `stealth`
+  waits them out in-process, and if the browser is *still* releasing files it
+  schedules a detached `purge` worker that finishes the deletion in the
+  background — the self-destruct never silently fails.
 - **Honest limit:** `stealth` protects your *identity inside the site* — not
   your network identity. The endpoint still sees your real IP; pair it with a
   VPN or Tor if that matters.
@@ -144,6 +148,7 @@ eroica harden -b brave -p research --tier strict   # re-tune later
 | `eroica audit` | Detect drift; exits non-zero if unhealthy |
 | `eroica launch` | Launch the browser in its hardened profile |
 | `eroica stealth` | Throwaway, anonymous-profile session; self-destructs on exit |
+| `eroica purge` | Wait for a locked profile to be released, then delete it |
 | `eroica config` | Show or update global configuration |
 | `eroica remove` | Delete a profile |
 

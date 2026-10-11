@@ -61,24 +61,27 @@ def test_plan_command_shell_shape(fake_binary: Path, family: str, marker: str) -
 
 def test_launch_dry_run_does_nothing(fake_binary: Path) -> None:
     session = plan_stealth("zen")
-    code = launch_stealth(session, dry_run=True)
-    assert code == 0
+    result = launch_stealth(session, dry_run=True)
+    assert result.exit_code == 0
+    assert result.discarded is False
     assert session.profile.path.is_dir()  # untouched by dry run
 
 
 def test_launch_disposes_profile_afterwards(fake_binary: Path) -> None:
     session = plan_stealth("zen")
     assert session.profile.path.is_dir()
-    code = launch_stealth(session, launcher=lambda command: 0)
-    assert code == 0
+    result = launch_stealth(session, launcher=lambda command: 0)
+    assert result.exit_code == 0
+    assert result.discarded is True
     assert not session.profile.path.exists()
     assert not (session.profile.path / ".eroica.json").exists()
 
 
 def test_launch_keep_preserves_profile(fake_binary: Path) -> None:
     session = plan_stealth("zen", keep=True)
-    code = launch_stealth(session, launcher=lambda command: 7)
-    assert code == 7
+    result = launch_stealth(session, launcher=lambda command: 7)
+    assert result.exit_code == 7
+    assert result.discarded is False
     assert session.profile.path.is_dir()
 
 
@@ -99,8 +102,8 @@ def test_launch_keeps_profile_when_launcher_itself_fails(fake_binary: Path) -> N
 def test_launch_reports_unremovable_profile(
     fake_binary: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If a lingering browser process still holds the profile, the session must
-    not pretend to be clean: warn loudly, leave the dir, and exit non-zero."""
+    """When no background purge can be started, the session must not pretend to
+    be clean: warn loudly, leave the dir, and exit non-zero."""
     from eroica.errors import ProfileError
     from eroica.profiles import remove_profile as real_remove
 
@@ -110,8 +113,43 @@ def test_launch_reports_unremovable_profile(
         raise ProfileError("still in use")
 
     monkeypatch.setattr("eroica.stealth.remove_profile", stuck_remove)
-    code = launch_stealth(session, launcher=lambda command: 0)
-    assert code == 1
+    monkeypatch.setattr("eroica.stealth._spawn_purge", lambda session: False)
+    result = launch_stealth(session, launcher=lambda command: 0)
+    assert result.exit_code == 1
+    assert result.discarded is False
+    assert result.purge_scheduled is False
+
+    monkeypatch.setattr("eroica.stealth.remove_profile", real_remove)
+    real_remove(session.profile, missing_ok=True)  # clean the fixture up
+    assert not session.profile.path.exists()
+
+
+def test_launch_schedules_purge_when_profile_is_locked(
+    fake_binary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A profile locked by a still-running browser is handed to a detached
+    purge worker; the session itself still exits cleanly."""
+    from eroica.errors import ProfileError
+    from eroica.profiles import remove_profile as real_remove
+
+    session = plan_stealth("zen")
+
+    def stuck_remove(profile: object, **kwargs: object) -> None:
+        raise ProfileError("still in use")
+
+    spawned: list[object] = []
+
+    def fake_purge(session: object) -> bool:
+        spawned.append(session)
+        return True
+
+    monkeypatch.setattr("eroica.stealth.remove_profile", stuck_remove)
+    monkeypatch.setattr("eroica.stealth._spawn_purge", fake_purge)
+    result = launch_stealth(session, launcher=lambda command: 0)
+    assert result.exit_code == 0
+    assert result.discarded is False
+    assert result.purge_scheduled is True
+    assert spawned  # the worker was asked to finish the deletion
 
     monkeypatch.setattr("eroica.stealth.remove_profile", real_remove)
     real_remove(session.profile, missing_ok=True)  # clean the fixture up

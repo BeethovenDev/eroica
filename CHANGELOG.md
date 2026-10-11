@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-10-11
+
+### Fixed
+
+- **`stealth` now never gives up silently.** Real-world testing showed that on
+  Windows a freshly-closed browser can keep hold of profile files (`cert9.db`,
+  IndexedDB sqlite) for longer than the in-process retry budget. When that
+  happens, `stealth` now:
+  - starts a **detached `purge` worker** that keeps retrying in the background
+    for up to 5 minutes and finishes the deletion as soon as the files are
+    released (the session command can return immediately);
+  - never prints the misleading “profile discarded” summary — the report now
+    says exactly what happened (`discarded` / `purge_scheduled` / left behind),
+    in both text and `--json` modes.
+
+### Added
+
+- **`eroica purge -b <browser> -p <profile>`**: wait (up to `--timeout`, default
+  300 s) until a profile's files are released, then delete it. Used both as the
+  `stealth` background worker and standalone.
+
 ## [0.2.1] — 2026-10-11
 
 ### Fixed
@@ -54,7 +75,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - JSONL audit with drift detection.
 - Dependency-free, fully type-annotated implementation and a 77-test suite.
 
-[Unreleased]: https://github.com/BeethovenDev/eroica/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/BeethovenDev/eroica/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/BeethovenDev/eroica/releases/tag/v0.2.2
 [0.2.1]: https://github.com/BeethovenDev/eroica/releases/tag/v0.2.1
 [0.2.0]: https://github.com/BeethovenDev/eroica/releases/tag/v0.2.0
 [0.1.1]: https://github.com/BeethovenDev/eroica/releases/tag/v0.1.1
