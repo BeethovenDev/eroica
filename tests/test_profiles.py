@@ -58,6 +58,39 @@ def test_remove_profile() -> None:
         remove_profile(profile)
 
 
+def test_remove_profile_retries_transient_locks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows: a freshly-closed browser holds files for a moment — deletion
+    must survive a few transient OSErrors instead of failing outright."""
+    import shutil
+
+    profile = create_profile("firefox", "temp", tier=Tier.STANDARD)
+
+    real_rmtree = shutil.rmtree
+    failures = {"left": 3}
+
+    def flaky_rmtree(path: object, *args: object, **kwargs: object) -> None:
+        if failures["left"] > 0:
+            failures["left"] -= 1
+            raise PermissionError(32, "being used by another process", str(path))
+        real_rmtree(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("eroica.profiles.shutil.rmtree", flaky_rmtree)
+    remove_profile(profile, retries=6)
+    assert not profile.path.exists()
+
+
+def test_remove_profile_gives_up_after_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = create_profile("firefox", "temp", tier=Tier.STANDARD)
+
+    def stuck_rmtree(path: object) -> None:
+        raise PermissionError(32, "being used by another process", str(path))
+
+    monkeypatch.setattr("eroica.profiles.shutil.rmtree", stuck_rmtree)
+    with pytest.raises(ProfileError, match="after .* retries"):
+        remove_profile(profile, retries=2)
+    assert profile.path.exists()
+
+
 @pytest.mark.parametrize("bad", ["", "..", "a/b", "a\\b", "a b", "-leading", "x" * 65])
 def test_validate_name_rejects_unsafe(bad: str) -> None:
     with pytest.raises(ProfileError):

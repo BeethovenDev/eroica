@@ -94,3 +94,25 @@ def test_launch_keeps_profile_when_launcher_itself_fails(fake_binary: Path) -> N
     # NOT delete the profile — destroying data while a browser may still be
     # open would be worse than leaving a throwaway dir behind.
     assert session.profile.path.is_dir()
+
+
+def test_launch_reports_unremovable_profile(
+    fake_binary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If a lingering browser process still holds the profile, the session must
+    not pretend to be clean: warn loudly, leave the dir, and exit non-zero."""
+    from eroica.errors import ProfileError
+    from eroica.profiles import remove_profile as real_remove
+
+    session = plan_stealth("zen")
+
+    def stuck_remove(profile: object, **kwargs: object) -> None:
+        raise ProfileError("still in use")
+
+    monkeypatch.setattr("eroica.stealth.remove_profile", stuck_remove)
+    code = launch_stealth(session, launcher=lambda command: 0)
+    assert code == 1
+
+    monkeypatch.setattr("eroica.stealth.remove_profile", real_remove)
+    real_remove(session.profile, missing_ok=True)  # clean the fixture up
+    assert not session.profile.path.exists()

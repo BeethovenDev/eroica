@@ -22,6 +22,13 @@ from eroica.paths import data_home
 
 _log = log.get_logger("profiles")
 
+#: Deletion retry budget. On Windows a browser that just closed can still have
+#: a lingering child process holding profile files; chasing away those transient
+#: locks is what makes ``stealth``'s self-destruct reliable.
+_RETRY_ATTEMPTS = 8
+_RETRY_BASE_DELAY = 0.25  # seconds; doubles per attempt, capped below.
+_RETRY_MAX_DELAY = 1.0
+
 __all__ = [
     "META_FILENAME",
     "Profile",
@@ -183,14 +190,49 @@ def list_profiles(browser_key: str | None = None) -> list[Profile]:
     return found
 
 
-def remove_profile(profile: Profile, *, missing_ok: bool = False) -> None:
-    """Delete a profile directory and everything in it."""
+def remove_profile(
+    profile: Profile,
+    *,
+    missing_ok: bool = False,
+    retries: int = _RETRY_ATTEMPTS,
+) -> None:
+    """Delete a profile directory and everything in it.
+
+    Modern Windows browsers keep a couple of child processes alive for a few
+    moments after the last window closes; those hold file handles and make a
+    single ``rmtree`` fail with ``WinError 32``. Deletion therefore retries with
+    an exponential backoff until the locks clear (or ``retries`` is exhausted).
+    """
     if not profile.path.exists():
         if missing_ok:
             return
         raise ProfileNotFound(f"profile {profile.name!r} does not exist")
-    try:
-        shutil.rmtree(profile.path)
-    except OSError as exc:
-        raise ProfileError(f"could not remove {profile.path}: {exc}") from exc
-    _log.debug("removed profile %s", profile.name)
+
+    last_error: OSError | None = None
+    for attempt in range(retries + 1):
+        try:
+            shutil.rmtree(profile.path)
+            _log.debug("removed profile %s", profile.name)
+            return
+        except OSError as exc:
+            last_error = exc
+            if not profile.path.exists():
+                # Removed by something else in the meantime — good enough.
+                _log.debug("profile %s vanished during removal", profile.name)
+                return
+            if attempt >= retries:
+                break
+            delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
+            _log.debug(  # transient lock; retrying
+                "profile %s busy (%s); retry %d/%d",
+                profile.name,
+                exc.strerror or exc,
+                attempt + 1,
+                retries,
+            )
+            time.sleep(delay)
+
+    raise ProfileError(
+        f"could not remove {profile.path}: {last_error} "
+        f"(still held by another process after {retries} retries)"
+    )

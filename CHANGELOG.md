@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-11
+
+### Fixed
+
+- **`stealth` self-destruct on Windows.** A browser that just closed can still
+  have a child process holding profile files (e.g. `cert9.db`), which made
+  cleanup fail on the first try (`WinError 32`). Profile deletion now retries
+  with an exponential backoff; if the profile is truly still in use, the
+  command exits non-zero, warns loudly, and tells you the exact
+  `eroica remove` command instead of pretending the cleanup happened.
+- `eroica remove` benefits from the same retry handling.
+
 ## [0.2.0] — 2026-10-11
 
 ### Added
@@ -42,7 +54,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - JSONL audit with drift detection.
 - Dependency-free, fully type-annotated implementation and a 77-test suite.
 
-[Unreleased]: https://github.com/BeethovenDev/eroica/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/BeethovenDev/eroica/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/BeethovenDev/eroica/releases/tag/v0.2.1
 [0.2.0]: https://github.com/BeethovenDev/eroica/releases/tag/v0.2.0
 [0.1.1]: https://github.com/BeethovenDev/eroica/releases/tag/v0.1.1
 [0.1.0]: https://github.com/BeethovenDev/eroica/releases/tag/v0.1.0

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from eroica import log, ua
 from eroica.browsers import Browser, BrowserFamily, find_binary, get_browser
 from eroica.config import Config, Tier
-from eroica.errors import BrowserNotFound
+from eroica.errors import BrowserNotFound, ProfileError
 from eroica.flags import build_args
 from eroica.hardening import harden
 from eroica.paths import data_home
@@ -169,7 +169,17 @@ def launch_stealth(
     code = run(session.command)
 
     if not session.keep:
-        remove_profile(session.profile, missing_ok=True)
+        try:
+            remove_profile(session.profile, missing_ok=True)
+        except ProfileError as exc:
+            _log.warning("could not discard throwaway profile %s: %s", session.profile.name, exc)
+            _log.warning(
+                "the profile was left behind; once the browser is fully closed run "
+                "'eroica remove -b %s -p %s' to finish the job",
+                session.browser.key,
+                session.profile.name,
+            )
+            return 1
         _log.info("discarded throwaway profile %s", session.profile.name)
     else:
         _log.info("kept profile %s at %s (--keep)", session.profile.name, session.profile.path)
